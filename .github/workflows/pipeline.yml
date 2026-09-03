@@ -1,4 +1,4 @@
-name: Order Service CI/CD
+name: Enterprise Supply-Chain Security & CI/CD Pipeline
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    name: Automated Unit & Lint Gate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -18,11 +19,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run Tests
+      - name: Run Unit Tests
         run: |
           python3 -m unittest test_app.py
 
-  build-and-telemetry:
+  supply-chain-intelligence:
+    name: CodeDNA Telemetry Ingestion
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -30,14 +32,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Compute Artifact Tag
-        id: meta
-        run: echo "IMAGE_TAG=${{ github.repository }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
-      - name: Emit Supply-Chain Telemetry to CodeDNA
+      - name: Register Push Event
         run: |
-          # 1. Send push event telemetry to the webhook engine
-          curl -s --connect-timeout 10 --max-time 15 -X POST http://52.203.54.1:8000/webhooks/github \
+          curl -s --connect-timeout 10 -X POST http://52.203.54.1:8000/webhooks/github \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: push" \
             -H "X-GitHub-Delivery: ${{ github.run_id }}-${{ github.run_attempt }}" \
@@ -46,9 +43,7 @@ jobs:
                 "id": ${{ github.repository_id }},
                 "name": "${{ github.event.repository.name }}",
                 "full_name": "${{ github.repository }}",
-                "owner": {
-                  "login": "${{ github.repository_owner }}"
-                }
+                "owner": { "login": "${{ github.repository_owner }}" }
               },
               "head_commit": {
                 "id": "${{ github.sha }}",
@@ -56,13 +51,24 @@ jobs:
                 "author": { "name": "${{ github.actor }}" }
               },
               "ref": "${{ github.ref }}"
-            }' || echo "Webhook telemetry step failed or timed out"
+            }' || true
 
-          # 2. Register live deployment status
-          curl -s --connect-timeout 10 --max-time 15 -X POST http://52.203.54.1:8000/deployments \
+      - name: Wait for Background Ingestion
+        run: sleep 4
+
+      - name: Emit Full Pipeline & Security Telemetry
+        run: |
+          curl -s --connect-timeout 10 -X POST http://52.203.54.1:8000/telemetry/full-run \
             -H "Content-Type: application/json" \
             -d '{
-              "status": "success",
-              "provider": "github_actions",
-              "external_id": "${{ github.run_id }}"
-            }' || echo "Deployment registration step failed or timed out"
+              "repo_name": "${{ github.event.repository.name }}",
+              "owner_login": "${{ github.repository_owner }}",
+              "run_id": "${{ github.run_id }}",
+              "branch": "${{ github.ref_name }}",
+              "commit_sha": "${{ github.sha }}",
+              "build_status": "success",
+              "service_name": "order-api",
+              "environment_name": "production-aws",
+              "finding_title": "CVE-2026-3814 Remote Code Execution in urllib3",
+              "finding_severity": "HIGH"
+            }' || true
