@@ -36,14 +36,33 @@ jobs:
 
       - name: Emit Supply-Chain Telemetry to CodeDNA
         run: |
-          curl -s -X POST http://52.203.54.1:8000/deployments \
+          # 1. Send push event telemetry to the webhook engine
+          curl -s --connect-timeout 10 --max-time 15 -X POST http://52.203.54.1:8000/webhooks/github \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -H "X-GitHub-Delivery: ${{ github.run_id }}-${{ github.run_attempt }}" \
+            -d '{
+              "repository": {
+                "id": ${{ github.repository_id }},
+                "name": "${{ github.event.repository.name }}",
+                "full_name": "${{ github.repository }}",
+                "owner": {
+                  "login": "${{ github.repository_owner }}"
+                }
+              },
+              "head_commit": {
+                "id": "${{ github.sha }}",
+                "message": "${{ github.event.head_commit.message }}",
+                "author": { "name": "${{ github.actor }}" }
+              },
+              "ref": "${{ github.ref }}"
+            }' || echo "Webhook telemetry step failed or timed out"
+
+          # 2. Register live deployment status
+          curl -s --connect-timeout 10 --max-time 15 -X POST http://52.203.54.1:8000/deployments \
             -H "Content-Type: application/json" \
             -d '{
-              "organization": "${{ github.repository_owner }}",
-              "repository": "${{ github.event.repository.name }}",
-              "service": "order-api",
-              "environment": "production-aws",
-              "image_tag": "${{ steps.meta.outputs.IMAGE_TAG }}",
               "status": "success",
-              "commit_sha": "${{ github.sha }}"
-            }' || true
+              "provider": "github_actions",
+              "external_id": "${{ github.run_id }}"
+            }' || echo "Deployment registration step failed or timed out"
