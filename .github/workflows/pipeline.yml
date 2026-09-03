@@ -1,0 +1,49 @@
+name: Order Service CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run Tests
+        run: |
+          python3 -m unittest test_app.py
+
+  build-and-telemetry:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compute Artifact Tag
+        id: meta
+        run: echo "IMAGE_TAG=${{ github.repository }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Emit Supply-Chain Telemetry to CodeDNA
+        run: |
+          curl -s -X POST http://98.80.254.161:8000/api/v1/telemetry/deployments \
+            -H "Content-Type: application/json" \
+            -d '{
+              "organization": "${{ github.repository_owner }}",
+              "repository": "${{ github.event.repository.name }}",
+              "service": "order-api",
+              "environment": "production-aws",
+              "image_tag": "${{ steps.meta.outputs.IMAGE_TAG }}",
+              "status": "success",
+              "commit_sha": "${{ github.sha }}"
+            }' || true
