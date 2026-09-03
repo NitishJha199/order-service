@@ -36,7 +36,7 @@ jobs:
 
       - name: Emit Supply-Chain Telemetry to CodeDNA
         run: |
-          curl -s -X POST http://52.203.54.1:8000/api/v1/telemetry/deployments \
+          curl -s -X POST http://52.203.54.1:8000/deployments \
             -H "Content-Type: application/json" \
             -d '{
               "organization": "${{ github.repository_owner }}",
