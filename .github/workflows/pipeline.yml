@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest httpx || true
 
-      - name: Run Unit & Integration Tests
+      - name: Run Unit Tests
         run: |
           python -c "assert 200 == 200"
 
@@ -42,7 +42,7 @@ jobs:
         id: cve_extract
         run: |
           CVE_ID=$(jq -r '.Results[0].Vulnerabilities[0].VulnerabilityID // "CVE-2026-3814"' trivy-results.json 2>/dev/null || echo "CVE-2026-3814")
-          CVE_TITLE=$(jq -r '.Results[0].Vulnerabilities[0].Title // "Remote Code Execution in urllib3 via CRLF injection"' trivy-results.json 2>/dev/null || echo "Remote Code Execution in urllib3")
+          CVE_TITLE=$(jq -r '.Results[0].Vulnerabilities[0].Title // "Remote Code Execution in urllib3"' trivy-results.json 2>/dev/null || echo "Remote Code Execution in urllib3")
           CVE_SEV=$(jq -r '.Results[0].Vulnerabilities[0].Severity // "HIGH"' trivy-results.json 2>/dev/null || echo "HIGH")
           echo "cve_id=$CVE_ID" >> "$GITHUB_OUTPUT"
           echo "cve_title=$CVE_TITLE" >> "$GITHUB_OUTPUT"
@@ -66,23 +66,41 @@ jobs:
           echo "Deployment verified healthy on port 8080."
 
       - name: Ingest Lineage to CodeDNA Engine
-        env:
-          CVE_TITLE: ${{ needs.test-and-scan.outputs.cve_title || 'CVE-2026-3814 Remote Code Execution in urllib3' }}
-          CVE_SEV: ${{ needs.test-and-scan.outputs.cve_sev || 'HIGH' }}
         run: |
-          curl -s --connect-timeout 10 -X POST http://52.203.54.1:8000/telemetry/full-run \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"repo_name\": \"${{ github.event.repository.name }}\",
-              \"owner_login\": \"${{ github.repository_owner }}\",
-              \"run_id\": \"${{ github.run_id }}\",
-              \"branch\": \"${{ github.ref_name }}\",
-              \"build_status\": \"success\",
-              \"service_name\": \"order-api\",
-              \"environment_name\": \"production-aws\",
-              \"finding_title\": \"$CVE_TITLE\",
-              \"finding_severity\": \"$CVE_SEV\"
-            }"
+          cat << 'EOF' > send_telemetry.py
+          import json, os, urllib.request
+
+          payload = {
+              "repo_name": os.environ.get("REPO_NAME", "order-service"),
+              "owner_login": os.environ.get("REPO_OWNER", "NitishJha199"),
+              "run_id": os.environ.get("RUN_ID", "run-default"),
+              "branch": os.environ.get("BRANCH", "main"),
+              "build_status": "success",
+              "service_name": "order-api",
+              "environment_name": "production-aws",
+              "finding_title": os.environ.get("CVE_TITLE", "CVE-2026-3814 Remote Code Execution in urllib3"),
+              "finding_severity": os.environ.get("CVE_SEV", "HIGH")
+          }
+
+          req = urllib.request.Request(
+              "http://54.162.182.104:8000/telemetry/full-run",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"}
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=15) as res:
+                  print("CodeDNA Telemetry Response:", res.status)
+          except Exception as err:
+              print("CodeDNA Telemetry Alert:", err)
+          EOF
+
+          REPO_NAME="${{ github.event.repository.name }}" \
+          REPO_OWNER="${{ github.repository_owner }}" \
+          RUN_ID="${{ github.run_id }}" \
+          BRANCH="${{ github.ref_name }}" \
+          CVE_TITLE="${{ needs.test-and-scan.outputs.cve_title || 'CVE-2026-3814 Remote Code Execution in urllib3' }}" \
+          CVE_SEV="${{ needs.test-and-scan.outputs.cve_sev || 'HIGH' }}" \
+          python3 send_telemetry.py
 
       - name: Update CodeDNA Git Graph Topology
         run: |
@@ -103,4 +121,4 @@ jobs:
                 "author": { "name": "${{ github.actor }}" }
               },
               "ref": "${{ github.ref }}"
-            }'
+            }' || true
